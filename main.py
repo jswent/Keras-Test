@@ -239,7 +239,7 @@ steps ahead:
 from tensorflow.keras.preprocessing import timeseries_dataset_from_array
 
 batch_size = 64
-input_sequence_length = 12
+input_sequence_length = 10
 forecast_horizon = 3
 multi_horizon = False
 
@@ -323,24 +323,15 @@ test_dataset = create_tf_dataset(
 """
 ### Roads Graph
 
-As mentioned before, we assume that the road segments form a graph.
-The `PeMSD7` dataset has the road segments distance. The next step
-is to create the graph adjacency matrix from these distances. Following
-[Yu et al., 2018](https://arxiv.org/abs/1709.04875) (equation 10) we assume there
-is an edge between two nodes in the graph if the distance between the corresponding roads
-is less than a threshold.
+Creates a boolean adjacency matrix for the provided roads. A road is adjacent to another road if the distance 
+between the two roads is less than a threshold *epsilon*.
 """
 
 
 def compute_adjacency_matrix(
     route_distances: np.ndarray, sigma2: float, epsilon: float
 ):
-    """Computes the adjacency matrix from distances matrix.
-
-    It uses the formula in https://github.com/VeritasYin/STGCN_IJCAI-18#data-preprocessing to
-    compute an adjacency matrix from the distance matrix.
-    The implementation follows that paper.
-
+    """
     Args:
         route_distances: np.ndarray of shape `(num_routes, num_routes)`. Entry `i,j` of this array is the
             distance between roads `i,j`.
@@ -363,8 +354,8 @@ def compute_adjacency_matrix(
 
 """
 The function `compute_adjacency_matrix()` returns a boolean adjacency matrix
-where 1 means there is an edge between two nodes. We use the following class
-to store the information about the graph.
+where 1 means there is an edge between two nodes. The following class stores
+this information.
 """
 
 
@@ -423,6 +414,8 @@ class GraphConv(layers.Layer):
         **kwargs,
     ):
         super().__init__(**kwargs)
+        print("In feat: " + str(in_feat));
+        print("Out feat: " + str(out_feat));
         self.in_feat = in_feat
         self.out_feat = out_feat
         self.graph_info = graph_info
@@ -434,6 +427,7 @@ class GraphConv(layers.Layer):
             ),
             trainable=True,
         )
+        print("Weight: " + str(self.weight.value()))
         self.activation = layers.Activation(activation)
 
     def aggregate(self, neighbour_representations: tf.Tensor):
@@ -554,9 +548,7 @@ class LSTMGC(layers.Layer):
         # convert shape to  (num_nodes, batch_size, input_seq_len, in_feat)
         inputs = tf.transpose(inputs, [2, 0, 1, 3])
 
-        gcn_out = self.graph_conv(
-            inputs
-        )  # gcn_out has shape: (num_nodes, batch_size, input_seq_len, out_feat)
+        gcn_out = self.graph_conv(inputs)  # gcn_out has shape: (num_nodes, batch_size, input_seq_len, out_feat)
         shape = tf.shape(gcn_out)
         num_nodes, batch_size, input_seq_len, out_feat = (
             shape[0],
@@ -567,30 +559,24 @@ class LSTMGC(layers.Layer):
 
         # LSTM takes only 3D tensors as input
         gcn_out = tf.reshape(gcn_out, (batch_size * num_nodes, input_seq_len, out_feat))
-        lstm_out = self.lstm(
-            gcn_out
-        )  # lstm_out has shape: (batch_size * num_nodes, lstm_units)
+        lstm_out = self.lstm(gcn_out)  # lstm_out has shape: (batch_size * num_nodes, lstm_units)
 
-        dense_output = self.dense(
-            lstm_out
-        )  # dense_output has shape: (batch_size * num_nodes, output_seq_len)
+        dense_output = self.dense(lstm_out)  # dense_output has shape: (batch_size * num_nodes, output_seq_len)
         output = tf.reshape(dense_output, (num_nodes, batch_size, self.output_seq_len))
-        return tf.transpose(
-            output, [1, 2, 0]
-        )  # returns Tensor of shape (batch_size, output_seq_len, num_nodes)
+        return tf.transpose(output, [1, 2, 0])  # returns Tensor of shape (batch_size, output_seq_len, num_nodes)
 
 
 """
 ## Model training
 """
 
-in_feat = 1
+in_feat = 1     # doesn't work for any but 1, number of inputs in the weight tensor (GraphConv)
 batch_size = 64
 epochs = 20
-input_sequence_length = 12
-forecast_horizon = 3
+input_sequence_length = 10  # how many inputs to take
+forecast_horizon = 3   # how many time steps ahead to forecast
 multi_horizon = False
-out_feat = 10
+out_feat = 10   # number of outputs in the weight tensor (GraphConv)
 lstm_units = 64
 graph_conv_params = {
     "aggregation_type": "mean",
@@ -630,6 +616,7 @@ compute the MAE of the model and compare it to the MAE of naive forecasts.
 The naive forecasts are the last value of the speed for each node.
 """
 
+# x_test is iterator? y = speed at x_test
 x_test, y = next(test_dataset.as_numpy_iterator())
 y_pred = model.predict(x_test)
 # print(f"y_pred: {y_pred}")
@@ -644,11 +631,3 @@ naive_mse, model_mse = (
     np.square(y_pred[:, 0, :] - y[:, 0, :]).mean(),
 )
 print(f"naive MAE: {naive_mse}, model MAE: {model_mse}")
-
-"""
-Of course, the goal here is to demonstrate the method,
-not to achieve the best performance. To improve the
-model's accuracy, all model hyperparameters should be tuned carefully. In addition,
-several of the `LSTMGC` blocks can be stacked to increase the representation power
-of the model.
-"""
